@@ -1,16 +1,19 @@
 import { Select, Option, Button, IconButton, Divider } from "@mui/joy";
-import { isNumber, last, uniqBy } from "lodash-es";
+import { uniqBy } from "lodash-es";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "react-hot-toast";
 import { useTranslation } from "react-i18next";
 import useLocalStorage from "react-use/lib/useLocalStorage";
-import { TAB_SPACE_WIDTH, UNKNOWN_ID, VISIBILITY_SELECTOR_ITEMS } from "@/helpers/consts";
-import useCurrentUser from "@/hooks/useCurrentUser";
-import { useGlobalStore, useMemoStore, useResourceStore } from "@/store/module";
-import { useUserV1Store } from "@/store/v1";
+import { memoServiceClient } from "@/grpcweb";
+import { TAB_SPACE_WIDTH, UNKNOWN_ID } from "@/helpers/consts";
+import { useGlobalStore, useResourceStore } from "@/store/module";
+import { useMemoV1Store, useUserV1Store } from "@/store/v1";
+import { MemoRelation, MemoRelation_Type } from "@/types/proto/api/v2/memo_relation_service";
+import { Visibility } from "@/types/proto/api/v2/memo_service";
 import { Resource } from "@/types/proto/api/v2/resource_service";
-import { UserSetting, User_Role } from "@/types/proto/api/v2/user_service";
+import { UserSetting } from "@/types/proto/api/v2/user_service";
 import { useTranslate } from "@/utils/i18n";
+import { convertVisibilityFromString, convertVisibilityToString } from "@/utils/memo";
 import showCreateMemoRelationDialog from "../CreateMemoRelationDialog";
 import showCreateResourceDialog from "../CreateResourceDialog";
 import Icon from "../Icon";
@@ -20,16 +23,13 @@ import Editor, { EditorRefActions } from "./Editor";
 import RelationListView from "./RelationListView";
 import ResourceListView from "./ResourceListView";
 
-const listItemSymbolList = ["- [ ] ", "- [x] ", "- [X] ", "* ", "- "];
-const emptyOlReg = /^(\d+)\. $/;
-
 interface Props {
   className?: string;
   editorClassName?: string;
   cacheKey?: string;
-  memoId?: MemoId;
+  memoId?: number;
   relationList?: MemoRelation[];
-  onConfirm?: () => void;
+  onConfirm?: (memoId: number) => void;
 }
 
 interface State {
@@ -50,25 +50,23 @@ const MemoEditor = (props: Props) => {
     state: { systemStatus },
   } = useGlobalStore();
   const userV1Store = useUserV1Store();
-  const memoStore = useMemoStore();
+  const memoStore = useMemoV1Store();
   const resourceStore = useResourceStore();
-  const currentUser = useCurrentUser();
   const [state, setState] = useState<State>({
-    memoVisibility: "PRIVATE",
+    memoVisibility: Visibility.PRIVATE,
     resourceList: [],
     relationList: props.relationList ?? [],
     isUploadingResource: false,
     isRequesting: false,
   });
   const [hasContent, setHasContent] = useState<boolean>(false);
-  const [isInIME, setIsInIME] = useState(false);
   const editorRef = useRef<EditorRefActions>(null);
   const userSetting = userV1Store.userSetting as UserSetting;
   const referenceRelations = memoId
     ? state.relationList.filter(
-        (relation) => relation.memoId === memoId && relation.relatedMemoId !== memoId && relation.type === "REFERENCE"
+        (relation) => relation.memoId === memoId && relation.relatedMemoId !== memoId && relation.type === MemoRelation_Type.REFERENCE
       )
-    : state.relationList.filter((relation) => relation.type === "REFERENCE");
+    : state.relationList.filter((relation) => relation.type === MemoRelation_Type.REFERENCE);
 
   useEffect(() => {
     editorRef.current?.setContent(contentCache || "");
@@ -81,20 +79,18 @@ const MemoEditor = (props: Props) => {
     }
     setState((prevState) => ({
       ...prevState,
-      memoVisibility: visibility as Visibility,
+      memoVisibility: convertVisibilityFromString(visibility),
     }));
   }, [userSetting.memoVisibility, systemStatus.disablePublicMemos]);
 
   useEffect(() => {
     if (memoId) {
-      memoStore.getMemoById(memoId ?? UNKNOWN_ID).then((memo) => {
+      memoStore.getOrFetchMemoById(memoId ?? UNKNOWN_ID).then((memo) => {
         if (memo) {
           handleEditorFocus();
           setState((prevState) => ({
             ...prevState,
             memoVisibility: memo.visibility,
-            resourceList: memo.resourceList,
-            relationList: memo.relationList,
           }));
           if (!contentCache) {
             editorRef.current?.setContent(memo.content ?? "");
@@ -115,42 +111,6 @@ const MemoEditor = (props: Props) => {
         handleSaveBtnClick();
         return;
       }
-    }
-    if (event.key === "Enter" && !isInIME) {
-      const cursorPosition = editorRef.current.getCursorPosition();
-      const contentBeforeCursor = editorRef.current.getContent().slice(0, cursorPosition);
-      const rowValue = last(contentBeforeCursor.split("\n"));
-      if (rowValue) {
-        if (listItemSymbolList.includes(rowValue) || emptyOlReg.test(rowValue)) {
-          event.preventDefault();
-          editorRef.current.removeText(cursorPosition - rowValue.length, rowValue.length);
-        } else {
-          // unordered/todo list
-          let matched = false;
-          for (const listItemSymbol of listItemSymbolList) {
-            if (rowValue.startsWith(listItemSymbol)) {
-              event.preventDefault();
-              editorRef.current.insertText("", `\n${listItemSymbol}`);
-              matched = true;
-              break;
-            }
-          }
-
-          if (!matched) {
-            // ordered list
-            const olMatchRes = /^(\d+)\. /.exec(rowValue);
-            if (olMatchRes) {
-              const order = parseInt(olMatchRes[1]);
-              if (isNumber(order)) {
-                event.preventDefault();
-                editorRef.current.insertText("", `\n${order + 1}. `);
-              }
-            }
-          }
-          editorRef.current?.scrollToCursor();
-        }
-      }
-      return;
     }
     if (event.key === "Tab") {
       event.preventDefault();
@@ -190,7 +150,7 @@ const MemoEditor = (props: Props) => {
           ...prevState,
           relationList: uniqBy(
             [
-              ...memoIdList.map((id) => ({ memoId: memoId || UNKNOWN_ID, relatedMemoId: id, type: "REFERENCE" as MemoRelationType })),
+              ...memoIdList.map((id) => ({ memoId: memoId || UNKNOWN_ID, relatedMemoId: id, type: MemoRelation_Type.REFERENCE })),
               ...state.relationList,
             ].filter((relation) => relation.relatedMemoId !== (memoId || UNKNOWN_ID)),
             "relatedMemoId"
@@ -301,24 +261,44 @@ const MemoEditor = (props: Props) => {
     const content = editorRef.current?.getContent() ?? "";
     try {
       if (memoId && memoId !== UNKNOWN_ID) {
-        const prevMemo = await memoStore.getMemoById(memoId ?? UNKNOWN_ID);
-
+        const prevMemo = await memoStore.getOrFetchMemoById(memoId ?? UNKNOWN_ID);
         if (prevMemo) {
-          await memoStore.patchMemo({
-            id: prevMemo.id,
-            content,
-            visibility: state.memoVisibility,
-            resourceIdList: state.resourceList.map((resource) => resource.id),
-            relationList: state.relationList,
+          const memo = await memoStore.updateMemo(
+            {
+              id: prevMemo.id,
+              content,
+              visibility: state.memoVisibility,
+            },
+            ["content", "visibility"]
+          );
+          await memoServiceClient.setMemoResources({
+            id: memo.id,
+            resources: state.resourceList,
           });
+          await memoServiceClient.setMemoRelations({
+            id: memo.id,
+            relations: state.relationList,
+          });
+          if (onConfirm) {
+            onConfirm(memo.id);
+          }
         }
       } else {
-        await memoStore.createMemo({
+        const memo = await memoStore.createMemo({
           content,
           visibility: state.memoVisibility,
-          resourceIdList: state.resourceList.map((resource) => resource.id),
-          relationList: state.relationList,
         });
+        await memoServiceClient.setMemoResources({
+          id: memo.id,
+          resources: state.resourceList,
+        });
+        await memoServiceClient.setMemoRelations({
+          id: memo.id,
+          relations: state.relationList,
+        });
+        if (onConfirm) {
+          onConfirm(memo.id);
+        }
       }
       editorRef.current?.setContent("");
     } catch (error: any) {
@@ -336,9 +316,6 @@ const MemoEditor = (props: Props) => {
       ...prevState,
       resourceList: [],
     }));
-    if (onConfirm) {
-      onConfirm();
-    }
   };
 
   const handleCheckBoxBtnClick = () => {
@@ -402,15 +379,6 @@ const MemoEditor = (props: Props) => {
 
   const allowSave = (hasContent || state.resourceList.length > 0) && !state.isUploadingResource && !state.isRequesting;
 
-  const disableOption = (v: string) => {
-    const isAdminOrHost = currentUser.role === User_Role.ADMIN || currentUser.role === User_Role.HOST;
-
-    if (v === "PUBLIC" && !isAdminOrHost) {
-      return systemStatus.disablePublicMemos;
-    }
-    return false;
-  };
-
   return (
     <div
       className={`${
@@ -420,8 +388,6 @@ const MemoEditor = (props: Props) => {
       onKeyDown={handleKeyDown}
       onDrop={handleDropEvent}
       onFocus={handleEditorFocus}
-      onCompositionStart={() => setIsInIME(true)}
-      onCompositionEnd={() => setIsInIME(false)}
     >
       <Editor ref={editorRef} {...editorConfig} />
       <div className="relative w-full flex flex-row justify-between items-center pt-2">
@@ -468,9 +434,9 @@ const MemoEditor = (props: Props) => {
               }
             }}
           >
-            {VISIBILITY_SELECTOR_ITEMS.map((item) => (
-              <Option key={item} value={item} className="whitespace-nowrap" disabled={disableOption(item)}>
-                {t(`memo.visibility.${item.toLowerCase() as Lowercase<typeof item>}`)}
+            {[Visibility.PRIVATE, Visibility.PROTECTED, Visibility.PUBLIC].map((item) => (
+              <Option key={item} value={item} className="whitespace-nowrap">
+                {t(`memo.visibility.${convertVisibilityToString(item).toLowerCase()}` as any)}
               </Option>
             ))}
           </Select>

@@ -1,61 +1,38 @@
 import { Button } from "@mui/joy";
-import { last } from "lodash-es";
 import { useEffect, useState } from "react";
-import toast from "react-hot-toast";
 import useToggle from "react-use/lib/useToggle";
 import Empty from "@/components/Empty";
 import Icon from "@/components/Icon";
-import MemoContentV1 from "@/components/MemoContentV1";
 import MemoEditor from "@/components/MemoEditor";
-import MemoRelationListView from "@/components/MemoRelationListView";
-import MemoResourceListView from "@/components/MemoResourceListView";
 import MobileHeader from "@/components/MobileHeader";
+import TimelineMemo from "@/components/TimelineMemo";
 import DatePicker from "@/components/kit/DatePicker";
-import { DAILY_TIMESTAMP, DEFAULT_MEMO_LIMIT } from "@/helpers/consts";
-import { getDateStampByDate, getNormalizedDateString, getTimeStampByDate, getTimeString } from "@/helpers/datetime";
+import { DAILY_TIMESTAMP } from "@/helpers/consts";
+import { getDateStampByDate, getNormalizedDateString, getTimeStampByDate } from "@/helpers/datetime";
 import useCurrentUser from "@/hooks/useCurrentUser";
-import { useMemoStore } from "@/store/module";
-import { extractUsernameFromName } from "@/store/v1";
+import { useMemoList, useMemoV1Store } from "@/store/v1";
 import { useTranslate } from "@/utils/i18n";
 
 const Timeline = () => {
   const t = useTranslate();
-  const memoStore = useMemoStore();
   const currentUser = useCurrentUser();
+  const memoStore = useMemoV1Store();
+  const memoList = useMemoList();
   const currentDateStamp = getDateStampByDate(getNormalizedDateString()) as number;
   const [selectedDateStamp, setSelectedDateStamp] = useState<number>(currentDateStamp as number);
   const [showDatePicker, toggleShowDatePicker] = useToggle(false);
-  const dailyMemos = memoStore.state.memos
-    .filter((m) => {
-      const displayTimestamp = getTimeStampByDate(m.displayTs);
-      const selectedDateStampWithOffset = selectedDateStamp;
-      return (
-        m.rowStatus === "NORMAL" &&
-        m.creatorUsername === extractUsernameFromName(currentUser.name) &&
-        displayTimestamp >= selectedDateStampWithOffset &&
-        displayTimestamp < selectedDateStampWithOffset + DAILY_TIMESTAMP
-      );
-    })
-    .sort((a, b) => getTimeStampByDate(a.displayTs) - getTimeStampByDate(b.displayTs));
+  const sortedMemos = memoList.value.sort((a, b) => getTimeStampByDate(a.createTime) - getTimeStampByDate(b.createTime));
 
   useEffect(() => {
-    let offset = 0;
-    const fetchMoreMemos = async () => {
-      try {
-        const fetchedMemos = await memoStore.fetchMemos("", DEFAULT_MEMO_LIMIT, offset);
-        offset += fetchedMemos.length;
-        if (fetchedMemos.length === DEFAULT_MEMO_LIMIT) {
-          const lastMemo = last(fetchedMemos);
-          if (lastMemo && lastMemo.displayTs > selectedDateStamp) {
-            await fetchMoreMemos();
-          }
-        }
-      } catch (error: any) {
-        console.error(error);
-        toast.error(error.response.data.message);
-      }
-    };
-    fetchMoreMemos();
+    memoList.reset();
+    const filters = [
+      `creator == "${currentUser.name}"`,
+      `created_ts_after == ${selectedDateStamp / 1000}`,
+      `created_ts_before == ${(selectedDateStamp + DAILY_TIMESTAMP) / 1000}`,
+    ];
+    memoStore.fetchMemos({
+      filter: filters.join(" && "),
+    });
   }, [selectedDateStamp]);
 
   const handleDataPickerChange = (datestamp: number): void => {
@@ -96,28 +73,21 @@ const Timeline = () => {
             />
           </div>
           <div className="w-full h-auto flex flex-col justify-start items-start px-2 pb-4 bg-white dark:bg-zinc-700">
-            {dailyMemos.length === 0 && (
+            {sortedMemos.length === 0 && (
               <div className="w-full mt-4 mb-8 flex flex-col justify-center items-center italic">
                 <Empty />
                 <p className="mt-4 text-gray-600 dark:text-gray-400">{t("message.no-data")}</p>
               </div>
             )}
             <div className="flex flex-col justify-start items-start w-full mt-2">
-              {dailyMemos.map((memo, index) => (
+              {sortedMemos.map((memo, index) => (
                 <div
-                  key={`${memo.id}-${memo.displayTs}`}
+                  key={`${memo.id}-${memo.createTime}`}
                   className="relative w-full flex flex-col justify-start items-start pl-8 sm:pl-12 pt-2 pb-4"
                 >
-                  <div className="w-full flex flex-row justify-start items-center mt-0.5 mb-1 text-sm font-mono text-gray-500 dark:text-gray-400">
-                    <span className="opacity-80">{getTimeString(memo.displayTs)}</span>
-                    <Icon.Dot className="w-5 h-auto opacity-60" />
-                    <span className="opacity-60">#{memo.id}</span>
-                  </div>
-                  <MemoContentV1 content={memo.content} />
-                  <MemoResourceListView resourceList={memo.resourceList} />
-                  <MemoRelationListView memo={memo} relationList={memo.relationList.filter((relation) => relation.type === "REFERENCE")} />
+                  <TimelineMemo memo={memo} />
                   <div className="absolute left-1 sm:left-2 top-3 h-full">
-                    {index !== dailyMemos.length - 1 && (
+                    {index !== sortedMemos.length - 1 && (
                       <div className="absolute top-2 left-[7px] h-full w-0.5 bg-gray-400 dark:bg-gray-500 block"></div>
                     )}
                     <div className="border-4 rounded-full border-white relative dark:border-zinc-700">
@@ -126,7 +96,6 @@ const Timeline = () => {
                   </div>
                 </div>
               ))}
-
               {selectedDateStamp === currentDateStamp && (
                 <div className="w-full pl-0 sm:pl-12 sm:mt-4">
                   <MemoEditor cacheKey="timeline-editor" />

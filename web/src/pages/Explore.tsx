@@ -1,56 +1,51 @@
-import { useEffect, useRef } from "react";
-import { toast } from "react-hot-toast";
+import { useEffect, useState } from "react";
 import Empty from "@/components/Empty";
-import Memo from "@/components/Memo";
 import MemoFilter from "@/components/MemoFilter";
+import MemoView from "@/components/MemoView";
 import MobileHeader from "@/components/MobileHeader";
 import { DEFAULT_MEMO_LIMIT } from "@/helpers/consts";
-import { useFilterStore, useMemoStore } from "@/store/module";
+import { getTimeStampByDate } from "@/helpers/datetime";
+import useCurrentUser from "@/hooks/useCurrentUser";
+import { useFilterStore } from "@/store/module";
+import { useMemoList, useMemoV1Store } from "@/store/v1";
 import { useTranslate } from "@/utils/i18n";
 
 const Explore = () => {
   const t = useTranslate();
+  const user = useCurrentUser();
   const filterStore = useFilterStore();
-  const memoStore = useMemoStore();
-  const filter = filterStore.state;
-  const { loadingStatus, memos } = memoStore.state;
-  const { text: textQuery } = filter;
-  const fetchMoreRef = useRef<HTMLSpanElement>(null);
+  const memoStore = useMemoV1Store();
+  const memoList = useMemoList();
+  const [isComplete, setIsComplete] = useState(false);
+  const [isRequesting, setIsRequesting] = useState(false);
+  const { tag: tagQuery, text: textQuery } = filterStore.state;
+  const sortedMemos = memoList.value.sort((a, b) => getTimeStampByDate(b.displayTime) - getTimeStampByDate(a.displayTime));
 
-  const fetchedMemos = memos.filter((memo) => {
-    if (textQuery && !memo.content.toLowerCase().includes(textQuery.toLowerCase())) {
-      return false;
+  useEffect(() => {
+    memoList.reset();
+    fetchMemos();
+  }, [tagQuery, textQuery]);
+
+  const fetchMemos = async () => {
+    const filters = [`row_status == "NORMAL"`, `visibilities == [${user ? "'PUBLIC', 'PROTECTED'" : "'PUBLIC'"}]`];
+    const contentSearch: string[] = [];
+    if (tagQuery) {
+      contentSearch.push(`"#${tagQuery}"`);
     }
-    return true;
-  });
-
-  const sortedMemos = fetchedMemos
-    .filter((m) => m.rowStatus === "NORMAL" && m.visibility !== "PRIVATE")
-    .sort((mi, mj) => mj.displayTs - mi.displayTs);
-
-  useEffect(() => {
-    memoStore.setLoadingStatus("incomplete");
-  }, []);
-
-  useEffect(() => {
-    if (!fetchMoreRef.current) return;
-
-    const observer = new IntersectionObserver(([entry]) => {
-      if (!entry.isIntersecting) return;
-      observer.disconnect();
-      handleFetchMoreClick();
+    if (textQuery) {
+      contentSearch.push(`"${textQuery}"`);
+    }
+    if (contentSearch.length > 0) {
+      filters.push(`content_search == [${contentSearch.join(", ")}]`);
+    }
+    setIsRequesting(true);
+    const data = await memoStore.fetchMemos({
+      limit: DEFAULT_MEMO_LIMIT,
+      offset: memoList.size(),
+      filter: filters.join(" && "),
     });
-    observer.observe(fetchMoreRef.current);
-
-    return () => observer.disconnect();
-  }, [loadingStatus]);
-
-  const handleFetchMoreClick = async () => {
-    try {
-      await memoStore.fetchAllMemos(DEFAULT_MEMO_LIMIT, sortedMemos.length);
-    } catch (error: any) {
-      toast.error(error.response.data.message);
-    }
+    setIsRequesting(false);
+    setIsComplete(data.length < DEFAULT_MEMO_LIMIT);
   };
 
   return (
@@ -59,29 +54,25 @@ const Explore = () => {
       <div className="relative w-full h-auto flex flex-col justify-start items-start px-4 sm:px-6">
         <MemoFilter />
         {sortedMemos.map((memo) => (
-          <Memo key={memo.id} memo={memo} lazyRendering showCreator showParent />
+          <MemoView key={memo.id} memo={memo} lazyRendering showCreator showParent />
         ))}
 
-        {loadingStatus === "fetching" ? (
-          <div className="flex flex-col justify-start items-center w-full mt-2 mb-1">
+        {isRequesting ? (
+          <div className="flex flex-col justify-start items-center w-full my-8">
             <p className="text-sm text-gray-400 italic">{t("memo.fetching-data")}</p>
           </div>
-        ) : (
-          <div className="flex flex-col justify-start items-center w-full my-6">
-            <div className="text-sm text-gray-400 italic">
-              {loadingStatus === "complete" ? (
-                sortedMemos.length === 0 && (
-                  <div className="w-full mt-12 mb-8 flex flex-col justify-center items-center italic">
-                    <Empty />
-                    <p className="mt-4 text-gray-600 dark:text-gray-400">{t("message.no-data")}</p>
-                  </div>
-                )
-              ) : (
-                <span ref={fetchMoreRef} className="cursor-pointer hover:text-green-600" onClick={handleFetchMoreClick}>
-                  {t("memo.fetch-more")}
-                </span>
-              )}
+        ) : isComplete ? (
+          sortedMemos.length === 0 && (
+            <div className="w-full mt-12 mb-8 flex flex-col justify-center items-center italic">
+              <Empty />
+              <p className="mt-2 text-gray-600 dark:text-gray-400">{t("message.no-data")}</p>
             </div>
+          )
+        ) : (
+          <div className="w-full flex flex-row justify-center items-center my-2">
+            <span className="cursor-pointer text-sm italic text-gray-500  hover:text-green-600" onClick={fetchMemos}>
+              {t("memo.fetch-more")}
+            </span>
           </div>
         )}
       </div>

@@ -3,6 +3,7 @@ package v2
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/google/cel-go/cel"
@@ -55,8 +56,14 @@ func (s *APIV2Service) ListMemos(ctx context.Context, request *apiv2pb.ListMemos
 		if err != nil {
 			return nil, status.Errorf(codes.InvalidArgument, "invalid filter: %v", err)
 		}
-		if filter.Visibility != nil {
-			memoFind.VisibilityList = []store.Visibility{*filter.Visibility}
+		if len(filter.ContentSearch) > 0 {
+			memoFind.ContentSearch = filter.ContentSearch
+		}
+		if len(filter.Visibilities) > 0 {
+			memoFind.VisibilityList = filter.Visibilities
+		}
+		if filter.OrderByPinned {
+			memoFind.OrderByPinned = filter.OrderByPinned
 		}
 		if filter.CreatedTsBefore != nil {
 			memoFind.CreatedTsBefore = filter.CreatedTsBefore
@@ -94,9 +101,8 @@ func (s *APIV2Service) ListMemos(ctx context.Context, request *apiv2pb.ListMemos
 		memoFind.VisibilityList = []store.Visibility{store.Public, store.Protected}
 	}
 
-	if request.PageSize != 0 {
-		offset := int(request.Page * request.PageSize)
-		limit := int(request.PageSize)
+	if request.Limit != 0 {
+		offset, limit := int(request.Offset), int(request.Limit)
 		memoFind.Offset = &offset
 		memoFind.Limit = &limit
 	}
@@ -173,8 +179,10 @@ func (s *APIV2Service) UpdateMemo(ctx context.Context, request *apiv2pb.UpdateMe
 		return nil, status.Errorf(codes.PermissionDenied, "permission denied")
 	}
 
+	currentTs := time.Now().Unix()
 	update := &store.UpdateMemo{
-		ID: request.Id,
+		ID:        request.Id,
+		UpdatedTs: &currentTs,
 	}
 	for _, path := range request.UpdateMask.Paths {
 		if path == "content" {
@@ -186,6 +194,17 @@ func (s *APIV2Service) UpdateMemo(ctx context.Context, request *apiv2pb.UpdateMe
 			rowStatus := convertRowStatusToStore(request.Memo.RowStatus)
 			println("rowStatus", rowStatus)
 			update.RowStatus = &rowStatus
+		} else if path == "created_ts" {
+			createdTs := request.Memo.CreateTime.AsTime().Unix()
+			update.CreatedTs = &createdTs
+		} else if path == "pinned" {
+			if _, err := s.Store.UpsertMemoOrganizer(ctx, &store.MemoOrganizer{
+				MemoID: request.Id,
+				UserID: user.ID,
+				Pinned: request.Memo.Pinned,
+			}); err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to upsert memo organizer")
+			}
 		}
 	}
 
@@ -233,6 +252,44 @@ func (s *APIV2Service) DeleteMemo(ctx context.Context, request *apiv2pb.DeleteMe
 	return &apiv2pb.DeleteMemoResponse{}, nil
 }
 
+func (s *APIV2Service) SetMemoResources(ctx context.Context, request *apiv2pb.SetMemoResourcesRequest) (*apiv2pb.SetMemoResourcesResponse, error) {
+	resources, err := s.Store.ListResources(ctx, &store.FindResource{MemoID: &request.Id})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list resources")
+	}
+
+	// Delete resources that are not in the request.
+	for _, resource := range resources {
+		found := false
+		for _, requestResource := range request.Resources {
+			if resource.ID == int32(requestResource.Id) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			if err = s.Store.DeleteResource(ctx, &store.DeleteResource{
+				ID:     int32(resource.ID),
+				MemoID: &request.Id,
+			}); err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to delete resource")
+			}
+		}
+	}
+
+	// Update resources' memo_id in the request.
+	for _, resource := range request.Resources {
+		if _, err := s.Store.UpdateResource(ctx, &store.UpdateResource{
+			ID:     resource.Id,
+			MemoID: &request.Id,
+		}); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to update resource")
+		}
+	}
+
+	return &apiv2pb.SetMemoResourcesResponse{}, nil
+}
+
 func (s *APIV2Service) ListMemoResources(ctx context.Context, request *apiv2pb.ListMemoResourcesRequest) (*apiv2pb.ListMemoResourcesResponse, error) {
 	resources, err := s.Store.ListResources(ctx, &store.FindResource{
 		MemoID: &request.Id,
@@ -246,6 +303,56 @@ func (s *APIV2Service) ListMemoResources(ctx context.Context, request *apiv2pb.L
 	}
 	for _, resource := range resources {
 		response.Resources = append(response.Resources, s.convertResourceFromStore(ctx, resource))
+	}
+	return response, nil
+}
+
+func (s *APIV2Service) SetMemoRelations(ctx context.Context, request *apiv2pb.SetMemoRelationsRequest) (*apiv2pb.SetMemoRelationsResponse, error) {
+	referenceType := store.MemoRelationReference
+	// Delete all reference relations first.
+	if err := s.Store.DeleteMemoRelation(ctx, &store.DeleteMemoRelation{
+		MemoID: &request.Id,
+		Type:   &referenceType,
+	}); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to delete memo relation")
+	}
+
+	for _, relation := range request.Relations {
+		if _, err := s.Store.UpsertMemoRelation(ctx, &store.MemoRelation{
+			MemoID:        request.Id,
+			RelatedMemoID: relation.RelatedMemoId,
+			Type:          convertMemoRelationTypeToStore(relation.Type),
+		}); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to upsert memo relation")
+		}
+	}
+
+	return &apiv2pb.SetMemoRelationsResponse{}, nil
+}
+
+func (s *APIV2Service) ListMemoRelations(ctx context.Context, request *apiv2pb.ListMemoRelationsRequest) (*apiv2pb.ListMemoRelationsResponse, error) {
+	relationList := []*apiv2pb.MemoRelation{}
+	tempList, err := s.Store.ListMemoRelations(ctx, &store.FindMemoRelation{
+		MemoID: &request.Id,
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, relation := range tempList {
+		relationList = append(relationList, convertMemoRelationFromStore(relation))
+	}
+	tempList, err = s.Store.ListMemoRelations(ctx, &store.FindMemoRelation{
+		RelatedMemoID: &request.Id,
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, relation := range tempList {
+		relationList = append(relationList, convertMemoRelationFromStore(relation))
+	}
+
+	response := &apiv2pb.ListMemoRelationsResponse{
+		Relations: relationList,
 	}
 	return response, nil
 }
@@ -317,13 +424,19 @@ func (s *APIV2Service) convertMemoFromStore(ctx context.Context, memo *store.Mem
 		displayTs = memo.UpdatedTs
 	}
 
+	creator, err := s.Store.GetUser(ctx, &store.FindUser{ID: &memo.CreatorID})
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to get creator")
+	}
+
 	return &apiv2pb.Memo{
 		Id:          int32(memo.ID),
 		RowStatus:   convertRowStatusFromStore(memo.RowStatus),
+		Creator:     fmt.Sprintf("%s%s", UserNamePrefix, creator.Username),
+		CreatorId:   int32(memo.CreatorID),
 		CreateTime:  timestamppb.New(time.Unix(memo.CreatedTs, 0)),
 		UpdateTime:  timestamppb.New(time.Unix(memo.UpdatedTs, 0)),
 		DisplayTime: timestamppb.New(time.Unix(displayTs, 0)),
-		CreatorId:   int32(memo.CreatorID),
 		Content:     memo.Content,
 		Nodes:       convertFromASTNodes(rawNodes),
 		Visibility:  convertVisibilityFromStore(memo.Visibility),
@@ -346,6 +459,36 @@ func (s *APIV2Service) getMemoDisplayWithUpdatedTsSettingValue(ctx context.Conte
 		}
 	}
 	return memoDisplayWithUpdatedTs, nil
+}
+
+func convertMemoRelationFromStore(memoRelation *store.MemoRelation) *apiv2pb.MemoRelation {
+	return &apiv2pb.MemoRelation{
+		MemoId:        memoRelation.MemoID,
+		RelatedMemoId: memoRelation.RelatedMemoID,
+		Type:          convertMemoRelationTypeFromStore(memoRelation.Type),
+	}
+}
+
+func convertMemoRelationTypeFromStore(relationType store.MemoRelationType) apiv2pb.MemoRelation_Type {
+	switch relationType {
+	case store.MemoRelationReference:
+		return apiv2pb.MemoRelation_REFERENCE
+	case store.MemoRelationComment:
+		return apiv2pb.MemoRelation_COMMENT
+	default:
+		return apiv2pb.MemoRelation_TYPE_UNSPECIFIED
+	}
+}
+
+func convertMemoRelationTypeToStore(relationType apiv2pb.MemoRelation_Type) store.MemoRelationType {
+	switch relationType {
+	case apiv2pb.MemoRelation_REFERENCE:
+		return store.MemoRelationReference
+	case apiv2pb.MemoRelation_COMMENT:
+		return store.MemoRelationComment
+	default:
+		return store.MemoRelationReference
+	}
 }
 
 func convertVisibilityFromStore(visibility store.Visibility) apiv2pb.Visibility {
@@ -376,7 +519,9 @@ func convertVisibilityToStore(visibility apiv2pb.Visibility) store.Visibility {
 
 // ListMemosFilterCELAttributes are the CEL attributes for ListMemosFilter.
 var ListMemosFilterCELAttributes = []cel.EnvOption{
-	cel.Variable("visibility", cel.StringType),
+	cel.Variable("content_search", cel.ListType(cel.StringType)),
+	cel.Variable("visibilities", cel.ListType(cel.StringType)),
+	cel.Variable("order_by_pinned", cel.BoolType),
 	cel.Variable("created_ts_before", cel.IntType),
 	cel.Variable("created_ts_after", cel.IntType),
 	cel.Variable("creator", cel.StringType),
@@ -384,7 +529,9 @@ var ListMemosFilterCELAttributes = []cel.EnvOption{
 }
 
 type ListMemosFilter struct {
-	Visibility      *store.Visibility
+	ContentSearch   []string
+	Visibilities    []store.Visibility
+	OrderByPinned   bool
 	CreatedTsBefore *int64
 	CreatedTsAfter  *int64
 	Creator         *string
@@ -414,23 +561,33 @@ func findField(callExpr *expr.Expr_Call, filter *ListMemosFilter) {
 	if len(callExpr.Args) == 2 {
 		idExpr := callExpr.Args[0].GetIdentExpr()
 		if idExpr != nil {
-			if idExpr.Name == "visibility" {
-				visibility := store.Visibility(callExpr.Args[1].GetConstExpr().GetStringValue())
-				filter.Visibility = &visibility
-			}
-			if idExpr.Name == "created_ts_before" {
+			if idExpr.Name == "content_search" {
+				contentSearch := []string{}
+				for _, expr := range callExpr.Args[1].GetListExpr().GetElements() {
+					value := expr.GetConstExpr().GetStringValue()
+					contentSearch = append(contentSearch, value)
+				}
+				filter.ContentSearch = contentSearch
+			} else if idExpr.Name == "visibilities" {
+				visibilities := []store.Visibility{}
+				for _, expr := range callExpr.Args[1].GetListExpr().GetElements() {
+					value := expr.GetConstExpr().GetStringValue()
+					visibilities = append(visibilities, store.Visibility(value))
+				}
+				filter.Visibilities = visibilities
+			} else if idExpr.Name == "order_by_pinned" {
+				value := callExpr.Args[1].GetConstExpr().GetBoolValue()
+				filter.OrderByPinned = value
+			} else if idExpr.Name == "created_ts_before" {
 				createdTsBefore := callExpr.Args[1].GetConstExpr().GetInt64Value()
 				filter.CreatedTsBefore = &createdTsBefore
-			}
-			if idExpr.Name == "created_ts_after" {
+			} else if idExpr.Name == "created_ts_after" {
 				createdTsAfter := callExpr.Args[1].GetConstExpr().GetInt64Value()
 				filter.CreatedTsAfter = &createdTsAfter
-			}
-			if idExpr.Name == "creator" {
+			} else if idExpr.Name == "creator" {
 				creator := callExpr.Args[1].GetConstExpr().GetStringValue()
 				filter.Creator = &creator
-			}
-			if idExpr.Name == "row_status" {
+			} else if idExpr.Name == "row_status" {
 				rowStatus := store.RowStatus(callExpr.Args[1].GetConstExpr().GetStringValue())
 				filter.RowStatus = &rowStatus
 			}

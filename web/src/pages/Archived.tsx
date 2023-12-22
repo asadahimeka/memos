@@ -4,7 +4,7 @@ import toast from "react-hot-toast";
 import { showCommonDialog } from "@/components/Dialog/CommonDialog";
 import Empty from "@/components/Empty";
 import Icon from "@/components/Icon";
-import MemoContentV1 from "@/components/MemoContentV1";
+import MemoContent from "@/components/MemoContent";
 import MobileHeader from "@/components/MobileHeader";
 import { memoServiceClient } from "@/grpcweb";
 import { getDateTimeString } from "@/helpers/datetime";
@@ -44,7 +44,7 @@ const Archived = () => {
       style: "danger",
       dialogName: "delete-memo-dialog",
       onConfirm: async () => {
-        await memoStore.deleteMemo(memo);
+        await memoStore.deleteMemo(memo.id);
         setArchivedMemos((prev) => prev.filter((m) => m.id !== memo.id));
       },
     });
@@ -104,7 +104,7 @@ const Archived = () => {
                     </Tooltip>
                   </div>
                 </div>
-                <MemoContentV1 content={memo.content} nodes={memo.nodes} />
+                <MemoContent content={memo.content} nodes={memo.nodes} />
               </div>
             ))}
           </div>

@@ -4,16 +4,21 @@ import { toast } from "react-hot-toast";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { UNKNOWN_ID } from "@/helpers/consts";
-import { getRelativeTimeString } from "@/helpers/datetime";
+import { getRelativeTimeString, getTimeStampByDate } from "@/helpers/datetime";
 import useCurrentUser from "@/hooks/useCurrentUser";
 import useNavigateTo from "@/hooks/useNavigateTo";
-import { useFilterStore, useMemoStore } from "@/store/module";
-import { useUserV1Store, extractUsernameFromName } from "@/store/v1";
+import { useFilterStore } from "@/store/module";
+import { useUserV1Store, extractUsernameFromName, useMemoV1Store } from "@/store/v1";
+import { RowStatus } from "@/types/proto/api/v2/common";
+import { MemoRelation, MemoRelation_Type } from "@/types/proto/api/v2/memo_relation_service";
+import { Memo, Visibility } from "@/types/proto/api/v2/memo_service";
+import { Resource } from "@/types/proto/api/v2/resource_service";
 import { useTranslate } from "@/utils/i18n";
+import { convertVisibilityToString } from "@/utils/memo";
 import showChangeMemoCreatedTsDialog from "./ChangeMemoCreatedTsDialog";
 import { showCommonDialog } from "./Dialog/CommonDialog";
 import Icon from "./Icon";
-import MemoContentV1 from "./MemoContentV1";
+import MemoContent from "./MemoContent";
 import showMemoEditorDialog from "./MemoEditor/MemoEditorDialog";
 import MemoRelationListView from "./MemoRelationListView";
 import MemoResourceListView from "./MemoResourceListView";
@@ -32,40 +37,41 @@ interface Props {
   lazyRendering?: boolean;
 }
 
-const Memo: React.FC<Props> = (props: Props) => {
+const MemoView: React.FC<Props> = (props: Props) => {
   const { memo, lazyRendering } = props;
   const t = useTranslate();
   const navigateTo = useNavigateTo();
   const { i18n } = useTranslation();
   const filterStore = useFilterStore();
-  const memoStore = useMemoStore();
+  const memoStore = useMemoV1Store();
   const userV1Store = useUserV1Store();
   const user = useCurrentUser();
   const [shouldRender, setShouldRender] = useState<boolean>(lazyRendering ? false : true);
-  const [displayTime, setDisplayTime] = useState<string>(getRelativeTimeString(memo.displayTs));
+  const [displayTime, setDisplayTime] = useState<string>(getRelativeTimeString(getTimeStampByDate(memo.displayTime)));
+  const [creator, setCreator] = useState(userV1Store.getUserByUsername(extractUsernameFromName(memo.creator)));
+  const [parentMemo, setParentMemo] = useState<Memo | undefined>(undefined);
+  const [resources, setResources] = useState<Resource[]>([]);
+  const [memoRelations, setMemoRelations] = useState<MemoRelation[]>([]);
   const memoContainerRef = useRef<HTMLDivElement>(null);
-  const readonly = memo.creatorUsername !== extractUsernameFromName(user?.name);
-  const [creator, setCreator] = useState(userV1Store.getUserByUsername(memo.creatorUsername));
-  const referenceRelations = memo.relationList.filter((relation) => relation.type === "REFERENCE");
+  const referenceRelations = memoRelations.filter((relation) => relation.type === MemoRelation_Type.REFERENCE);
+  const readonly = memo.creator !== user?.name;
 
   // Prepare memo creator.
   useEffect(() => {
     if (creator) return;
 
-    const fn = async () => {
-      const user = await userV1Store.getOrFetchUserByUsername(memo.creatorUsername);
+    (async () => {
+      const user = await userV1Store.getOrFetchUserByUsername(extractUsernameFromName(memo.creator));
       setCreator(user);
-    };
-
-    fn();
-  }, [memo.creatorUsername]);
+    })();
+  }, [memo.creator]);
 
   // Update display time string.
   useEffect(() => {
     let intervalFlag: any = -1;
-    if (Date.now() - memo.displayTs < 1000 * 60 * 60 * 24) {
+    if (Date.now() - getTimeStampByDate(memo.displayTime) < 1000 * 60 * 60 * 24) {
       intervalFlag = setInterval(() => {
-        setDisplayTime(getRelativeTimeString(memo.displayTs));
+        setDisplayTime(getRelativeTimeString(getTimeStampByDate(memo.displayTime)));
       }, 1000 * 1);
     }
 
@@ -90,6 +96,27 @@ const Memo: React.FC<Props> = (props: Props) => {
     return () => observer.disconnect();
   }, [lazyRendering, filterStore.state]);
 
+  useEffect(() => {
+    if (!shouldRender) {
+      return;
+    }
+
+    memoStore.fetchMemoResources(memo.id).then((resources: Resource[]) => {
+      setResources(resources);
+    });
+    memoStore.fetchMemoRelations(memo.id).then((relations: MemoRelation[]) => {
+      setMemoRelations(relations);
+      const parentMemoId = relations.find(
+        (relation) => relation.memoId === memo.id && relation.type === MemoRelation_Type.COMMENT
+      )?.relatedMemoId;
+      if (parentMemoId) {
+        memoStore.getOrFetchMemoById(parentMemoId).then((memo: Memo) => {
+          setParentMemo(memo);
+        });
+      }
+    });
+  }, [shouldRender]);
+
   if (!shouldRender) {
     // Render a placeholder to occupy the space.
     return <div className={`w-full h-32 !bg-transparent ${"memos-" + memo.id}`} ref={memoContainerRef} />;
@@ -106,9 +133,21 @@ const Memo: React.FC<Props> = (props: Props) => {
   const handleTogglePinMemoBtnClick = async () => {
     try {
       if (memo.pinned) {
-        await memoStore.unpinMemo(memo.id);
+        await memoStore.updateMemo(
+          {
+            id: memo.id,
+            pinned: false,
+          },
+          ["pinned"]
+        );
       } else {
-        await memoStore.pinMemo(memo.id);
+        await memoStore.updateMemo(
+          {
+            id: memo.id,
+            pinned: true,
+          },
+          ["pinned"]
+        );
       }
     } catch (error) {
       // do nth
@@ -127,7 +166,7 @@ const Memo: React.FC<Props> = (props: Props) => {
         {
           memoId: UNKNOWN_ID,
           relatedMemoId: memo.id,
-          type: "REFERENCE",
+          type: MemoRelation_Type.REFERENCE,
         },
       ],
     });
@@ -135,10 +174,13 @@ const Memo: React.FC<Props> = (props: Props) => {
 
   const handleArchiveMemoClick = async () => {
     try {
-      await memoStore.patchMemo({
-        id: memo.id,
-        rowStatus: "ARCHIVED",
-      });
+      await memoStore.updateMemo(
+        {
+          id: memo.id,
+          rowStatus: RowStatus.ARCHIVED,
+        },
+        ["row_status"]
+      );
     } catch (error: any) {
       console.error(error);
       toast.error(error.response.data.message);
@@ -152,7 +194,7 @@ const Memo: React.FC<Props> = (props: Props) => {
       style: "danger",
       dialogName: "delete-memo-dialog",
       onConfirm: async () => {
-        await memoStore.deleteMemoById(memo.id);
+        await memoStore.deleteMemo(memo.id);
       },
     });
   };
@@ -167,37 +209,6 @@ const Memo: React.FC<Props> = (props: Props) => {
         filterStore.setTagFilter(undefined);
       } else {
         filterStore.setTagFilter(tagName);
-      }
-    } else if (targetEl.classList.contains("todo-block")) {
-      if (readonly) {
-        return;
-      }
-
-      const status = targetEl.dataset?.value;
-      const todoElementList = [...(memoContainerRef.current?.querySelectorAll(`span.todo-block[data-value=${status}]`) ?? [])];
-      for (const element of todoElementList) {
-        if (element === targetEl) {
-          const index = todoElementList.indexOf(element);
-          const tempList = memo.content.split(status === "DONE" ? /- \[x\] / : /- \[ \] /);
-          let finalContent = "";
-
-          for (let i = 0; i < tempList.length; i++) {
-            if (i === 0) {
-              finalContent += `${tempList[i]}`;
-            } else {
-              if (i === index + 1) {
-                finalContent += status === "DONE" ? "- [ ] " : "- [x] ";
-              } else {
-                finalContent += status === "DONE" ? "- [x] " : "- [ ] ";
-              }
-              finalContent += `${tempList[i]}`;
-            }
-          }
-          await memoStore.patchMemo({
-            id: memo.id,
-            content: finalContent,
-          });
-        }
       }
     } else if (targetEl.tagName === "IMG") {
       const imgUrl = targetEl.getAttribute("src");
@@ -216,7 +227,7 @@ const Memo: React.FC<Props> = (props: Props) => {
         <div className="w-full max-w-[calc(100%-20px)] flex flex-row justify-start items-center mr-1">
           {props.showCreator && creator && (
             <>
-              <Link to={`/u/${encodeURIComponent(memo.creatorUsername)}`}>
+              <Link to={`/u/${encodeURIComponent(extractUsernameFromName(memo.creator))}`}>
                 <Tooltip title={"Creator"} placement="top">
                   <span className="flex flex-row justify-start items-center">
                     <UserAvatar className="!w-5 !h-5 mr-1" avatarUrl={creator.avatarUrl} />
@@ -247,10 +258,10 @@ const Memo: React.FC<Props> = (props: Props) => {
                 <span className="text-sm text-gray-500 dark:text-gray-400">#{memo.id}</span>
               </Tooltip>
             </Link>
-            {props.showVisibility && memo.visibility !== "PRIVATE" && (
+            {props.showVisibility && memo.visibility !== Visibility.PRIVATE && (
               <>
                 <Icon.Dot className="w-4 h-auto text-gray-400 dark:text-zinc-400" />
-                <Tooltip title={t(`memo.visibility.${memo.visibility.toLowerCase()}` as any)} placement="top">
+                <Tooltip title={t(`memo.visibility.${convertVisibilityToString(memo.visibility)}` as any)} placement="top">
                   <span>
                     <VisibilityIcon visibility={memo.visibility} />
                   </span>
@@ -267,7 +278,7 @@ const Memo: React.FC<Props> = (props: Props) => {
               </span>
               <div className="more-action-btns-wrapper">
                 <div className="more-action-btns-container min-w-[6em]">
-                  {!memo.parent && (
+                  {!parentMemo && (
                     <span className="btn" onClick={handleTogglePinMemoBtnClick}>
                       {memo.pinned ? <Icon.BookmarkMinus className="w-4 h-auto mr-2" /> : <Icon.BookmarkPlus className="w-4 h-auto mr-2" />}
                       {memo.pinned ? t("common.unpin") : t("common.pin")}
@@ -277,7 +288,7 @@ const Memo: React.FC<Props> = (props: Props) => {
                     <Icon.Edit3 className="w-4 h-auto mr-2" />
                     {t("common.edit")}
                   </span>
-                  {!memo.parent && (
+                  {!parentMemo && (
                     <span className="btn" onClick={handleMarkMemoClick}>
                       <Icon.Link className="w-4 h-auto mr-2" />
                       {t("common.mark")}
@@ -302,23 +313,23 @@ const Memo: React.FC<Props> = (props: Props) => {
           )}
         </div>
       </div>
-      {props.showParent && memo.parent && (
+      {props.showParent && parentMemo && (
         <div className="w-auto max-w-full mb-1">
           <Link
             className="px-2 py-0.5 border rounded-full max-w-xs w-auto text-xs flex flex-row justify-start items-center flex-nowrap text-gray-600 dark:text-gray-400 dark:border-gray-500 hover:shadow hover:opacity-80"
-            to={`/m/${memo.parent.id}`}
+            to={`/m/${parentMemo.id}`}
           >
             <Icon.ArrowUpRightFromCircle className="w-3 h-auto shrink-0 opacity-60" />
-            <span className="mx-1 opacity-60">#{memo.parent.id}</span>
-            <span className="truncate">{memo.parent.content}</span>
+            <span className="mx-1 opacity-60">#{parentMemo.id}</span>
+            <span className="truncate">{parentMemo.content}</span>
           </Link>
         </div>
       )}
-      <MemoContentV1 content={memo.content} onMemoContentClick={handleMemoContentClick} />
-      <MemoResourceListView resourceList={memo.resourceList} />
+      <MemoContent content={memo.content} nodes={memo.nodes} onMemoContentClick={handleMemoContentClick} />
+      <MemoResourceListView resourceList={resources} />
       <MemoRelationListView memo={memo} relationList={referenceRelations} />
     </div>
   );
 };
 
-export default memo(Memo);
+export default memo(MemoView);
