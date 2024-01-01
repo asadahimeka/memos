@@ -10,7 +10,7 @@ const MemoResourceListView = ({ resourceList = [] }: { resourceList: Resource[] 
   const mediaResources: Resource[] = [];
   const otherResources: Resource[] = [];
 
-  resourceList.forEach((resource) => {
+  resourceList.sort((a, b) => a.id - b.id).forEach((resource) => {
     const type = getResourceType(resource);
     if (type === "image/*" || type === "video/*") {
       mediaResources.push(resource);
@@ -60,13 +60,13 @@ const MemoResourceListView = ({ resourceList = [] }: { resourceList: Resource[] 
   const MediaList = ({ resources = [] }: { resources: Resource[] }) => {
     if (resources.length === 0) return <></>;
 
-    if (resources.length === 1) {
-      return (
-        <div className="mt-2 max-w-full flex justify-center items-center border dark:border-zinc-800 rounded overflow-hidden hide-scrollbar hover:shadow-md">
-          <MediaCard resource={mediaResources[0]} />
-        </div>
-      );
-    }
+    // if (resources.length === 1) {
+    //   return (
+    //     <div className="mt-2 max-w-full flex justify-center items-center border dark:border-zinc-800 rounded overflow-hidden hide-scrollbar hover:shadow-md">
+    //       <MediaCard resource={mediaResources[0]} />
+    //     </div>
+    //   );
+    // }
 
     const cards = resources.map((resource) => (
       <SquareDiv
@@ -77,9 +77,9 @@ const MemoResourceListView = ({ resourceList = [] }: { resourceList: Resource[] 
       </SquareDiv>
     ));
 
-    if (resources.length === 2 || resources.length === 4) {
-      return <div className="w-full mt-2 grid gap-2 grid-cols-2">{cards}</div>;
-    }
+    // if (resources.length === 2 || resources.length === 4) {
+    //   return <div className="w-full mt-2 grid gap-2 grid-cols-2">{cards}</div>;
+    // }
 
     return <div className="w-full mt-2 grid gap-2 grid-cols-2 sm:grid-cols-3">{cards}</div>;
   };
