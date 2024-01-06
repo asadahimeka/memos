@@ -196,7 +196,7 @@ const MemoView: React.FC<Props> = (props: Props) => {
             <>
               <Icon.Dot className="w-4 h-auto text-gray-400 dark:text-zinc-400" />
               <Tooltip title={"Pinned"} placement="top">
-                <Icon.Bookmark className="w-4 h-auto text-green-600" />
+                <Icon.Bookmark className="w-4 h-auto text-amber-500" />
               </Tooltip>
             </>
           )}
@@ -251,7 +251,7 @@ const MemoView: React.FC<Props> = (props: Props) => {
           )}
         </div>
       </div>
-      <MemoContent nodes={memo.nodes} onMemoContentClick={handleMemoContentClick} />
+      <MemoContent memoId={memo.id} nodes={memo.nodes} onMemoContentClick={handleMemoContentClick} />
       <MemoResourceListView resourceList={memo.resources} />
       <MemoRelationListView memo={memo} relationList={referenceRelations} />
     </div>
