@@ -46,6 +46,12 @@ func (d *DB) ListMemos(ctx context.Context, find *store.FindMemo) ([]*store.Memo
 	if v := find.CreatedTsAfter; v != nil {
 		where, args = append(where, "memo.created_ts > "+placeholder(len(args)+1)), append(args, *v)
 	}
+	if v := find.UpdatedTsBefore; v != nil {
+		where, args = append(where, "memo.updated_ts < "+placeholder(len(args)+1)), append(args, *v)
+	}
+	if v := find.UpdatedTsAfter; v != nil {
+		where, args = append(where, "memo.updated_ts > "+placeholder(len(args)+1)), append(args, *v)
+	}
 	if v := find.ContentSearch; len(v) != 0 {
 		for _, s := range v {
 			where, args = append(where, "memo.content LIKE "+placeholder(len(args)+1)), append(args, fmt.Sprintf("%%%s%%", s))
@@ -81,7 +87,7 @@ func (d *DB) ListMemos(ctx context.Context, find *store.FindMemo) ([]*store.Memo
 		`memo.updated_ts AS updated_ts`,
 		`memo.row_status AS row_status`,
 		`memo.visibility AS visibility`,
-		`memo_organizer.pinned AS pinned`,
+		`COALESCE(memo_organizer.pinned, 0) AS pinned`,
 		`memo_relation.related_memo_id AS parent_id`,
 	}
 	if !find.ExcludeContent {
@@ -110,7 +116,6 @@ func (d *DB) ListMemos(ctx context.Context, find *store.FindMemo) ([]*store.Memo
 	list := make([]*store.Memo, 0)
 	for rows.Next() {
 		var memo store.Memo
-		pinned := sql.NullBool{}
 		dests := []any{
 			&memo.ID,
 			&memo.CreatorID,
@@ -118,7 +123,7 @@ func (d *DB) ListMemos(ctx context.Context, find *store.FindMemo) ([]*store.Memo
 			&memo.UpdatedTs,
 			&memo.RowStatus,
 			&memo.Visibility,
-			&pinned,
+			&memo.Pinned,
 			&memo.ParentID,
 		}
 		if !find.ExcludeContent {
@@ -126,9 +131,6 @@ func (d *DB) ListMemos(ctx context.Context, find *store.FindMemo) ([]*store.Memo
 		}
 		if err := rows.Scan(dests...); err != nil {
 			return nil, err
-		}
-		if pinned.Valid {
-			memo.Pinned = pinned.Bool
 		}
 		list = append(list, &memo)
 	}

@@ -16,6 +16,7 @@ const App = () => {
   const userStore = useUserStore();
   const [loading, setLoading] = useState(true);
   const { appearance, locale, systemStatus } = globalStore.state;
+  const userSetting = userStore.userSetting;
 
   // Redirect to sign up page if no host.
   useEffect(() => {
@@ -78,33 +79,43 @@ const App = () => {
   useEffect(() => {
     document.title = systemStatus.customizedProfile.name;
     const link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
-    link.href = systemStatus.customizedProfile.logoUrl || "/logo.png";
+    link.href = systemStatus.customizedProfile.logoUrl || "/logo.webp";
   }, [systemStatus.customizedProfile]);
 
   useEffect(() => {
-    document.documentElement.setAttribute("lang", locale);
-    i18n.changeLanguage(locale);
-    storage.set({
-      locale: locale,
-    });
-    if (locale === "ar") {
+    if (!userSetting) {
+      return;
+    }
+
+    globalStore.setLocale(userSetting.locale);
+    globalStore.setAppearance(userSetting.appearance as Appearance);
+  }, [userSetting?.locale, userSetting?.appearance]);
+
+  useEffect(() => {
+    const { locale: storageLocale } = storage.get(["locale"]);
+    const currentLocale = storageLocale || locale;
+    i18n.changeLanguage(currentLocale);
+    document.documentElement.setAttribute("lang", currentLocale);
+    if (currentLocale === "ar") {
       document.documentElement.setAttribute("dir", "rtl");
     } else {
       document.documentElement.setAttribute("dir", "ltr");
     }
+    storage.set({
+      locale: currentLocale,
+    });
   }, [locale]);
 
   useEffect(() => {
-    storage.set({
-      appearance: appearance,
-    });
-
-    let currentAppearance = appearance;
-    if (appearance === "system") {
+    const { appearance: storageAppearance } = storage.get(["appearance"]);
+    let currentAppearance = (storageAppearance || appearance) as Appearance;
+    if (currentAppearance === "system") {
       currentAppearance = getSystemColorScheme();
     }
-
     setMode(currentAppearance);
+    storage.set({
+      appearance: currentAppearance,
+    });
   }, [appearance]);
 
   useEffect(() => {

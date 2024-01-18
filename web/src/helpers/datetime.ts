@@ -11,17 +11,6 @@ export function getDateStampByDate(t?: Date | number | string): number {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
 
-export function getNormalizedDateString(t?: Date | number | string): string {
-  const tsFromDate = getTimeStampByDate(t ? t : Date.now());
-  const d = new Date(tsFromDate);
-
-  const year = d.getFullYear();
-  const month = d.getMonth() + 1;
-  const date = d.getDate();
-
-  return `${year}/${month}/${date}`;
-}
-
 /**
  * Get a time string to provided time.
  *
@@ -53,38 +42,19 @@ export function getTimeString(t?: Date | number | string): string {
  * - "pl" locale: "30.01.2023, 22:05:00"
  */
 export function getDateTimeString(t?: Date | number | string | any, locale = i18n.language): string {
-  const tsFromDate = getTimeStampByDate(t ? t : Date.now());
-
-  return new Date(tsFromDate).toLocaleDateString(locale, {
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-    hour: "numeric",
-    minute: "numeric",
-    second: "numeric",
-  });
-}
-
-/**
- * Get a localized date string to provided time.
- *
- * If no date is provided, the current date is used.
- *
- * Note: This function does not include time information.
- *
- * Sample outputs:
- * - "en" locale: "1/30/2023"
- * - "pt-BR" locale: "30/01/2023"
- * - "pl" locale: "30.01.2023"
- */
-export function getDateString(t?: Date | number | string, locale = i18n.language): string {
-  const tsFromDate = getTimeStampByDate(t ? t : Date.now());
-
-  return new Date(tsFromDate).toLocaleDateString(locale, {
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-  });
+  const tsFromDate = new Date(getTimeStampByDate(t ? t : Date.now()));
+  try {
+    return tsFromDate.toLocaleString(locale, {
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "numeric",
+      minute: "numeric",
+      second: "numeric",
+    });
+  } catch (error) {
+    return tsFromDate.toLocaleString();
+  }
 }
 
 /**
@@ -109,14 +79,7 @@ export const getRelativeTimeString = (time: number, locale = i18n.language, form
   const dayMillis = hourMillis * 24;
   // Show full date if more than 1 day ago.
   if (pastTimeMillis >= dayMillis) {
-    return new Date(time).toLocaleDateString(locale, {
-      year: "numeric",
-      month: "numeric",
-      day: "numeric",
-      hour: "numeric",
-      minute: "numeric",
-      second: "numeric",
-    });
+    return getDateTimeString(time, locale);
   }
 
   // numeric: "auto" provides "yesterday" for 1 day ago, "always" provides "1 day ago"
@@ -165,6 +128,19 @@ export function getNormalizedTimeString(t?: Date | number | string): string {
   const mm = m < 10 ? "0" + m : m;
 
   return `${yyyy}-${MM}-${dd}T${hh}:${mm}`;
+}
+
+export function getNormalizedDateString(t?: Date | number | string): string {
+  const date = new Date(t ? t : Date.now());
+
+  const yyyy = date.getFullYear();
+  const M = date.getMonth() + 1;
+  const d = date.getDate();
+
+  const MM = M < 10 ? "0" + M : M;
+  const dd = d < 10 ? "0" + d : d;
+
+  return `${yyyy}-${MM}-${dd}`;
 }
 
 /**

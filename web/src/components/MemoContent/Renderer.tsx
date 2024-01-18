@@ -7,6 +7,7 @@ import {
   CodeNode,
   EscapingCharacterNode,
   HeadingNode,
+  HighlightNode,
   HorizontalRuleNode,
   ImageNode,
   ItalicNode,
@@ -17,6 +18,7 @@ import {
   OrderedListNode,
   ParagraphNode,
   StrikethroughNode,
+  TableNode,
   TagNode,
   TaskListNode,
   TextNode,
@@ -29,6 +31,7 @@ import Code from "./Code";
 import CodeBlock from "./CodeBlock";
 import EscapingCharacter from "./EscapingCharacter";
 import Heading from "./Heading";
+import Highlight from "./Highlight";
 import HorizontalRule from "./HorizontalRule";
 import Image from "./Image";
 import Italic from "./Italic";
@@ -38,6 +41,7 @@ import Math from "./Math";
 import OrderedList from "./OrderedList";
 import Paragraph from "./Paragraph";
 import Strikethrough from "./Strikethrough";
+import Table from "./Table";
 import Tag from "./Tag";
 import TaskList from "./TaskList";
 import Text from "./Text";
@@ -70,6 +74,8 @@ const Renderer: React.FC<Props> = ({ index, node }: Props) => {
       return <TaskList index={index} {...(node.taskListNode as TaskListNode)} />;
     case NodeType.MATH_BLOCK:
       return <Math {...(node.mathBlockNode as MathNode)} block={true} />;
+    case NodeType.TABLE:
+      return <Table {...(node.tableNode as TableNode)} />;
     case NodeType.TEXT:
       return <Text {...(node.textNode as TextNode)} />;
     case NodeType.BOLD:
@@ -92,6 +98,8 @@ const Renderer: React.FC<Props> = ({ index, node }: Props) => {
       return <Strikethrough {...(node.strikethroughNode as StrikethroughNode)} />;
     case NodeType.MATH:
       return <Math {...(node.mathNode as MathNode)} />;
+    case NodeType.HIGHLIGHT:
+      return <Highlight {...(node.highlightNode as HighlightNode)} />;
     case NodeType.ESCAPING_CHARACTER:
       return <EscapingCharacter {...(node.escapingCharacterNode as EscapingCharacterNode)} />;
     default:

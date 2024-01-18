@@ -42,9 +42,9 @@ const Explore = () => {
     }
     setIsRequesting(true);
     const data = await memoStore.fetchMemos({
+      filter: filters.join(" && "),
       limit: DEFAULT_MEMO_LIMIT,
       offset: memoList.size(),
-      filter: filters.join(" && "),
     });
     setIsRequesting(false);
     setIsComplete(data.length < DEFAULT_MEMO_LIMIT);
@@ -54,11 +54,10 @@ const Explore = () => {
     <section className="@container w-full max-w-5xl min-h-full flex flex-col justify-start items-center sm:pt-3 md:pt-6 pb-8">
       <MobileHeader />
       <div className="relative w-full h-auto flex flex-col justify-start items-start px-4 sm:px-6">
-        <MemoFilter />
+        <MemoFilter className="px-2 pb-2" />
         {sortedMemos.map((memo) => (
-          <MemoView key={memo.id} memo={memo} showCreator showParent />
+          <MemoView key={memo.id} memo={memo} showCreator />
         ))}
-
         {isRequesting ? (
           <div className="flex flex-col justify-start items-center w-full my-4">
             <p className="text-sm text-gray-400 italic">{t("memo.fetching-data")}</p>

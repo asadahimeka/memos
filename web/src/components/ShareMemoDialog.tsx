@@ -1,4 +1,4 @@
-import { Button } from "@mui/joy";
+import { Button, IconButton } from "@mui/joy";
 import copy from "copy-to-clipboard";
 import React, { useEffect, useRef } from "react";
 import { toast } from "react-hot-toast";
@@ -82,9 +82,9 @@ const ShareMemoDialog: React.FC<Props> = (props: Props) => {
     <>
       <div className="dialog-header-container py-3 px-4 !mb-0 rounded-t-lg">
         <p className="">{t("common.share")} Memo</p>
-        <button className="btn close-btn" onClick={handleCloseBtnClick}>
-          <Icon.X className="icon-img" />
-        </button>
+        <IconButton size="sm" onClick={handleCloseBtnClick}>
+          <Icon.X className="w-5 h-auto" />
+        </IconButton>
       </div>
       <div className="dialog-content-container w-full flex flex-col justify-start items-start relative">
         <div className="px-4 pb-3 w-full flex flex-row justify-start items-center space-x-2">
@@ -112,7 +112,7 @@ const ShareMemoDialog: React.FC<Props> = (props: Props) => {
           >
             <span className="w-full px-6 pt-5 pb-2 text-sm text-gray-500">{getDateTimeString(memo.displayTime)}</span>
             <div className="w-full px-6 text-base pb-4">
-              <MemoContent memoId={memo.id} nodes={memo.nodes} readonly={true} />
+              <MemoContent memoId={memo.id} nodes={memo.nodes} readonly={true} disableFilter />
               <MemoResourceListView resourceList={memo.resources} />
             </div>
             <div className="flex flex-row justify-between items-center w-full bg-gray-100 dark:bg-zinc-900 py-4 px-6">

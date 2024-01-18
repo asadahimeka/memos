@@ -6,23 +6,24 @@ import Renderer from "./Renderer";
 import { RendererContext } from "./types";
 
 interface Props {
-  memoId: number;
   nodes: Node[];
+  memoId?: number;
   readonly?: boolean;
+  disableFilter?: boolean;
   className?: string;
-  onMemoContentClick?: (e: React.MouseEvent) => void;
+  onClick?: (e: React.MouseEvent) => void;
 }
 
 const MemoContent: React.FC<Props> = (props: Props) => {
-  const { className, memoId, nodes, onMemoContentClick } = props;
+  const { className, memoId, nodes, onClick } = props;
   const currentUser = useCurrentUser();
   const memoStore = useMemoStore();
   const memoContentContainerRef = useRef<HTMLDivElement>(null);
-  const allowEdit = currentUser?.id === memoStore.getMemoById(memoId)?.creatorId && !props.readonly;
+  const allowEdit = !props.readonly && memoId && currentUser?.id === memoStore.getMemoById(memoId)?.creatorId;
 
   const handleMemoContentClick = async (e: React.MouseEvent) => {
-    if (onMemoContentClick) {
-      onMemoContentClick(e);
+    if (onClick) {
+      onClick(e);
     }
   };
 
@@ -32,15 +33,16 @@ const MemoContent: React.FC<Props> = (props: Props) => {
   return (
     <RendererContext.Provider
       value={{
-        memoId,
         nodes,
+        memoId,
         readonly: !allowEdit,
+        disableFilter: props.disableFilter,
       }}
     >
       <div className={`w-full flex flex-col justify-start items-start text-gray-800 dark:text-gray-300 ${className || ""}`}>
         <div
           ref={memoContentContainerRef}
-          className="w-full max-w-full word-break text-base leading-6 space-y-1"
+          className="w-full max-w-full word-break text-base leading-6 space-y-1 whitespace-pre-wrap"
           onClick={handleMemoContentClick}
         >
           {nodes.map((node, index) => {
